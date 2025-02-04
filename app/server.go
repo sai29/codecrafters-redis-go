@@ -3,13 +3,14 @@ package main
 import (
 	"fmt"
 	"net"
+	"os"
 )
 
 func main() {
 	listener, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
 		fmt.Println("Error starting server:", err)
-		return
+		os.Exit(1)
 	}
 	defer listener.Close()
 	fmt.Println("Server is listening on port 6379...")
@@ -18,18 +19,18 @@ func main() {
 
 	for {
 		if err != nil {
-			continue
+			fmt.Println("Error in connection, ", err)
+			os.Exit(1)
 		}
-		fmt.Println("New client connected")
-
 		handleConnection(conn)
 	}
 }
 
 func handleConnection(conn net.Conn) {
-	response := "+PONG\r\n"
-	_, err := conn.Write([]byte(response))
+	buf := make([]byte, 1024)
+	_, err := conn.Read(buf)
 	if err != nil {
-		fmt.Println("Error sending response:", err)
+		return
 	}
+	conn.Write([]byte("+PONG\r\n"))
 }
