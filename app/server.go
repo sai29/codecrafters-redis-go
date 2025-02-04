@@ -28,7 +28,8 @@ func main() {
 			continue
 		}
 
-		handleClient(conn)
+		conn.Write([]byte("+PONG\r\n"))
+		conn.Close()
 	}
 }
 
@@ -43,5 +44,5 @@ func handleClient(conn net.Conn) {
 
 	fmt.Println("Received data", buf[:n])
 
-	conn.Write(buf[:n])
+	conn.Write([]byte("+PONG\r\n"))
 }
