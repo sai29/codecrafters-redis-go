@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -8,7 +9,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -29,8 +29,6 @@ func main() {
 	defer listener.Close()
 	fmt.Println("server is listening on port 6379...")
 
-	var wg sync.WaitGroup
-
 	for {
 		conn, err := listener.Accept()
 		c.activeClients.Add(1)
@@ -39,88 +37,124 @@ func main() {
 			fmt.Println("Error in lister.Accept() connection, ", err)
 			continue
 		}
-		wg.Add(1)
-		go func() {
-			handleConnection(conn, &wg, c)
-		}()
+		go handleConnection(conn, c)
+
 	}
 }
 
-func handleConnection(conn net.Conn, wg *sync.WaitGroup, c *clientData) {
-	defer wg.Done()
+func handleConnection(conn net.Conn, c *clientData) {
 	defer conn.Close()
 
 	conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
+	reader := bufio.NewReader(conn)
 
 	for {
-		buf := make([]byte, 1024)
-		n, err := conn.Read(buf)
+
+		command, args, err := parseRESPString(reader)
+		if err != nil {
+			fmt.Println("Error parsing RESP string", err)
+		}
+		fmt.Println("Command is", command)
 
 		if err != nil {
 			if err == io.EOF {
 				fmt.Println("Client disconnected.")
+				c.activeClients.Add(^uint32(0))
+				fmt.Println("Current active clients is ", c.activeClients.Load())
+				break
 			} else {
-				fmt.Println("Error in conn.Read()", err)
+				continue
 			}
-			c.activeClients.Add(^uint32(0))
-			fmt.Println("Current active clients is ", c.activeClients.Load())
-			return
-		}
-		bufferString := string(buf[:n])
 
-		outputBytes, err := redisInputParser(bufferString)
+		}
+
+		output, err := handleCommand(command, args)
 
 		if err != nil {
 			fmt.Println("error from redisInput parser", err)
 		} else {
-			conn.Write(outputBytes)
+			conn.Write([]byte(output))
 		}
 
 	}
 }
 
-func redisInputParser(clientInput string) ([]byte, error) {
-	var input []string
-	output := make([]byte, 0, 256)
+func parseRESPString(reader *bufio.Reader) (string, []string, error) {
 
-	input = strings.Split(clientInput, "\r\n")
-	firstElement := input[0]
+	header, _, err := reader.ReadLine()
+	if err != nil {
+		return "", nil, err
+	}
 
-	if strings.HasPrefix(firstElement, "*") {
-		crlfSeparatedValuesCount, _ := strconv.Atoi(firstElement[1:])
-		forCount := crlfSeparatedValuesCount * 2
-		currentCommand := ""
+	fmt.Printf("Header length is %v and header[0] is %v and header is %v\n", len(string(header)), string(header[0]), string(header))
 
-		for i := 1; i <= forCount; i++ {
+	if len(header) == 0 || header[0] != '*' {
+		return "", nil, fmt.Errorf("invalid RESP header")
+	}
 
-			if strings.HasPrefix(input[i], "$") {
-				numberWithoutDollar := strings.ReplaceAll(input[i], "$", "")
-				_, err := strconv.Atoi(numberWithoutDollar)
-				if err != nil {
-					continue
-				}
-			} else {
-				switch strings.ToLower(input[i]) {
-				case "ping":
-					output = append(output, []byte("+PONG\r\n")...)
-					return []byte(output), nil
-				case "echo":
-					currentCommand = "echo"
-				default:
+	argSize, err := parseRESPInteger(string(header[1:]), 1, "invalid array size: %q (must be >= 1)")
+	if err != nil {
+		return "", nil, err
+	}
 
-					if currentCommand == "echo" {
-						respString := fmt.Sprintf("$%d\r\n%s\r\n", len(input[i]), input[i])
-						return []byte(respString), nil
-					} else {
-						return []byte{}, errors.New("invalid command")
-					}
+	var command string
+	var args []string
 
-				}
-
-			}
-
+	for i := 0; i < argSize; i++ {
+		line, _, err := reader.ReadLine()
+		if err != nil {
+			return "", nil, err
 		}
 
+		fmt.Printf("header length is %v and header is %v\n", len(line), string(line))
+
+		if len(line) == 0 || line[0] != '$' {
+			return "", nil, fmt.Errorf("invalid bulk string header")
+		}
+
+		strLength, err := parseRESPInteger(string(line[1:]), 0, "invalid string length: %q (must be >= 0)")
+		if err != nil {
+			return "", nil, err
+		}
+
+		stringBytes := make([]byte, strLength)
+		_, err = io.ReadFull(reader, stringBytes)
+		if err != nil {
+			return "", nil, err
+		}
+
+		reader.Discard(2)
+
+		if i == 0 {
+			command = strings.ToLower(string(stringBytes))
+		} else {
+			args = append(args, string(stringBytes))
+		}
 	}
-	return []byte(output), nil
+
+	return command, args, nil
+
+}
+
+func parseRESPInteger(s string, min int, errorFormat string) (int, error) {
+	val, err := strconv.Atoi(s)
+	if err != nil || val < min {
+		return 0, fmt.Errorf(errorFormat, s)
+	}
+
+	return val, nil
+}
+
+func handleCommand(command string, args []string) (string, error) {
+	switch command {
+	case "ping":
+		return "+PONG\r\n", nil
+	case "echo":
+		if len(args) == 0 {
+			return "", errors.New("err - wrong number of arguments")
+		}
+		return fmt.Sprintf("$%d\r\n%s\r\n", len(args[0]), args[0]), nil
+	default:
+		return "", errors.New("err - unknown command")
+	}
 }
