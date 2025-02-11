@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -17,9 +18,29 @@ type clientData struct {
 	activeClients atomic.Uint32
 }
 
+type redisStore struct {
+	mu    sync.RWMutex
+	store map[string]string
+}
+
+func (r *redisStore) Set(key, val string) {
+	r.mu.Lock()
+	r.store[key] = val
+	r.mu.Unlock()
+}
+
+func (r *redisStore) Get(key string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if val, ok := r.store[key]; ok {
+		return val, nil
+	}
+	return "", errors.New("err - no value for this key")
+}
 func main() {
 	c := &clientData{}
 	c.activeClients.Store(0)
+	store := &redisStore{store: map[string]string{}}
 
 	listener, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
@@ -32,17 +53,17 @@ func main() {
 	for {
 		conn, err := listener.Accept()
 		c.activeClients.Add(1)
-		fmt.Println("Global counter is ", c.activeClients.Load())
+		// fmt.Println("Global counter is ", c.activeClients.Load())
 		if err != nil {
 			fmt.Println("Error in lister.Accept() connection, ", err)
 			continue
 		}
-		go handleConnection(conn, c)
+		go handleConnection(conn, c, store)
 
 	}
 }
 
-func handleConnection(conn net.Conn, c *clientData) {
+func handleConnection(conn net.Conn, c *clientData, store *redisStore) {
 	defer conn.Close()
 
 	conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
@@ -54,7 +75,6 @@ func handleConnection(conn net.Conn, c *clientData) {
 		if err != nil {
 			fmt.Println("Error parsing RESP string", err)
 		}
-		fmt.Println("Command is", command)
 
 		if err != nil {
 			if err == io.EOF {
@@ -68,7 +88,7 @@ func handleConnection(conn net.Conn, c *clientData) {
 
 		}
 
-		output, err := handleCommand(command, args)
+		output, err := handleCommand(command, args, store)
 
 		if err != nil {
 			fmt.Println("error from redisInput parser", err)
@@ -85,8 +105,6 @@ func parseRESPString(reader *bufio.Reader) (string, []string, error) {
 	if err != nil {
 		return "", nil, err
 	}
-
-	fmt.Printf("Header length is %v and header[0] is %v and header is %v\n", len(string(header)), string(header[0]), string(header))
 
 	if len(header) == 0 || header[0] != '*' {
 		return "", nil, fmt.Errorf("invalid RESP header")
@@ -105,8 +123,6 @@ func parseRESPString(reader *bufio.Reader) (string, []string, error) {
 		if err != nil {
 			return "", nil, err
 		}
-
-		fmt.Printf("header length is %v and header is %v\n", len(line), string(line))
 
 		if len(line) == 0 || line[0] != '$' {
 			return "", nil, fmt.Errorf("invalid bulk string header")
@@ -141,11 +157,10 @@ func parseRESPInteger(s string, min int, errorFormat string) (int, error) {
 	if err != nil || val < min {
 		return 0, fmt.Errorf(errorFormat, s)
 	}
-
 	return val, nil
 }
 
-func handleCommand(command string, args []string) (string, error) {
+func handleCommand(command string, args []string, store *redisStore) (string, error) {
 	switch command {
 	case "ping":
 		return "+PONG\r\n", nil
@@ -154,6 +169,16 @@ func handleCommand(command string, args []string) (string, error) {
 			return "", errors.New("err - wrong number of arguments")
 		}
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(args[0]), args[0]), nil
+	case "set":
+		store.Set(args[0], args[1])
+		return "+OK\r\n", nil
+	case "get":
+		string, err := store.Get(args[0])
+		if err != nil {
+			return fmt.Sprintf("$%d\r\n", -1), nil
+		}
+		return fmt.Sprintf("$%d\r\n%s\r\n", len(string), string), nil
+
 	default:
 		return "", errors.New("err - unknown command")
 	}
