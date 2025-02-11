@@ -18,29 +18,70 @@ type clientData struct {
 	activeClients atomic.Uint32
 }
 
-type redisStore struct {
-	mu    sync.RWMutex
-	store map[string]string
+type value struct {
+	content string
+	expiry  int64
 }
 
-func (r *redisStore) Set(key, val string) {
+type redisStore struct {
+	mu    sync.RWMutex
+	store map[string]value
+}
+
+func (r *redisStore) Set(args []string) bool {
 	r.mu.Lock()
-	r.store[key] = val
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	var expiry int64
+
+	//[key, value, timeUnit, expiry] - for set with expiry
+	//[key, value] - set without expiry
+	if len(args) == 4 {
+		if strings.ToLower(args[2]) == "px" {
+			expiryInt, err := strconv.Atoi(args[3])
+			if err != nil {
+				return false
+			} else {
+				expiry = time.Now().Add(time.Millisecond * time.Duration(expiryInt)).UnixNano()
+			}
+		}
+	} else {
+		expiry = 0
+	}
+
+	r.store[args[0]] = value{
+		content: args[1],
+		expiry:  expiry,
+	}
+	return true
 }
 
 func (r *redisStore) Get(key string) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if val, ok := r.store[key]; ok {
-		return val, nil
+		if val.expiry == 0 {
+			return val.content, nil
+		} else {
+			if expired(val.expiry) {
+				return "", errors.New("err - value expired")
+			} else {
+				return val.content, nil
+			}
+		}
+
 	}
 	return "", errors.New("err - no value for this key")
 }
+
+func expired(expiryTime int64) bool {
+	return time.Now().UnixNano() >= expiryTime
+}
+
 func main() {
+
 	c := &clientData{}
 	c.activeClients.Store(0)
-	store := &redisStore{store: map[string]string{}}
+	store := &redisStore{store: map[string]value{}}
 
 	listener, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
@@ -170,12 +211,17 @@ func handleCommand(command string, args []string, store *redisStore) (string, er
 		}
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(args[0]), args[0]), nil
 	case "set":
-		store.Set(args[0], args[1])
-		return "+OK\r\n", nil
+		if len(args) < 2 {
+			return "", errors.New("ERR wrong number of arguments for 'set' command")
+		}
+		if store.Set(args) {
+			return "+OK\r\n", nil
+		}
+		return "", errors.New("err - setting value")
 	case "get":
 		string, err := store.Get(args[0])
 		if err != nil {
-			return fmt.Sprintf("$%d\r\n", -1), nil
+			return "$-1\r\n", nil
 		}
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(string), string), nil
 
