@@ -2,14 +2,11 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,70 +35,7 @@ type config struct {
 	rdb rdbConfig
 }
 
-func (r *redisStore) Set(args []string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var expiry int64
-
-	//[key, value, timeUnit, expiry] - for set with expiry
-	//[key, value] - set without expiry
-	if len(args) == 4 {
-		if strings.ToLower(args[2]) == "px" {
-			expiryInt, err := strconv.Atoi(args[3])
-			if err != nil {
-				return false
-			} else {
-				expiry = time.Now().Add(time.Millisecond * time.Duration(expiryInt)).UnixNano()
-			}
-		}
-	} else {
-		expiry = 0
-	}
-
-	r.store[args[0]] = value{
-		content: args[1],
-		expiry:  expiry,
-	}
-	return true
-}
-
-func (r *redisStore) Get(key string) (string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if val, ok := r.store[key]; ok {
-		if val.expiry == 0 {
-			return val.content, nil
-		} else {
-			if expired(val.expiry) {
-				return "", errors.New("err - value expired")
-			} else {
-				return val.content, nil
-			}
-		}
-
-	}
-	return "", errors.New("err - no value for this key")
-}
-
-func (c *config) getRDBConfig(args []string) (string, error) {
-	var output string
-	if args[0] == "get" {
-		if args[1] == "dir" {
-			output = c.rdb.dir
-		} else if args[1] == "rdbfilename" {
-			output = c.rdb.dbFileName
-		}
-		return respArrayGenerator(args[1], output), nil
-	}
-	return "", errors.New("err - unknown argument")
-}
-
-func expired(expiryTime int64) bool {
-	return time.Now().UnixNano() >= expiryTime
-}
-
 func main() {
-
 	c := &clientData{}
 	c.activeClients.Store(0)
 	store := &redisStore{store: map[string]value{}}
@@ -171,100 +105,4 @@ func handleConnection(conn net.Conn, c *clientData, store *redisStore, config *c
 		}
 
 	}
-}
-
-func parseRESPString(reader *bufio.Reader) (string, []string, error) {
-
-	header, _, err := reader.ReadLine()
-	if err != nil {
-		return "", nil, err
-	}
-
-	if len(header) == 0 || header[0] != '*' {
-		return "", nil, fmt.Errorf("invalid RESP header")
-	}
-
-	argSize, err := parseRESPInteger(string(header[1:]), 1, "invalid array size: %q (must be >= 1)")
-	if err != nil {
-		return "", nil, err
-	}
-
-	var command string
-	var args []string
-
-	for i := 0; i < argSize; i++ {
-		line, _, err := reader.ReadLine()
-		if err != nil {
-			return "", nil, err
-		}
-
-		if len(line) == 0 || line[0] != '$' {
-			return "", nil, fmt.Errorf("invalid bulk string header")
-		}
-
-		strLength, err := parseRESPInteger(string(line[1:]), 0, "invalid string length: %q (must be >= 0)")
-		if err != nil {
-			return "", nil, err
-		}
-
-		stringBytes := make([]byte, strLength)
-		_, err = io.ReadFull(reader, stringBytes)
-		if err != nil {
-			return "", nil, err
-		}
-
-		reader.Discard(2)
-
-		if i == 0 {
-			command = strings.ToLower(string(stringBytes))
-		} else {
-
-			args = append(args, strings.ToLower(string(stringBytes)))
-		}
-	}
-
-	return command, args, nil
-}
-
-func parseRESPInteger(s string, min int, errorFormat string) (int, error) {
-	val, err := strconv.Atoi(s)
-	if err != nil || val < min {
-		return 0, fmt.Errorf(errorFormat, s)
-	}
-	return val, nil
-}
-
-func handleCommand(command string, args []string, store *redisStore, config *config) (string, error) {
-	switch command {
-	case "ping":
-		return "+PONG\r\n", nil
-	case "echo":
-		if len(args) == 0 {
-			return "", errors.New("err - wrong number of arguments")
-		}
-		return fmt.Sprintf("$%d\r\n%s\r\n", len(args[0]), args[0]), nil
-	case "set":
-		if len(args) < 2 {
-			return "", errors.New("ERR wrong number of arguments for 'set' command")
-		}
-		if store.Set(args) {
-			return "+OK\r\n", nil
-		}
-		return "", errors.New("err - setting value")
-	case "get":
-		string, err := store.Get(args[0])
-		if err != nil {
-			return "$-1\r\n", nil
-		}
-		return fmt.Sprintf("$%d\r\n%s\r\n", len(string), string), nil
-	case "config":
-		return config.getRDBConfig(args)
-	default:
-		return "", errors.New("err - unknown command")
-	}
-}
-
-func respArrayGenerator(key, output string) string {
-	respArray := fmt.Sprintf("*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(output), output)
-	return respArray
 }
