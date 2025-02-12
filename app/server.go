@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +19,11 @@ type clientData struct {
 	activeClients atomic.Uint32
 }
 
+type rdbConfig struct {
+	dir        string
+	dbFileName string
+}
+
 type value struct {
 	content string
 	expiry  int64
@@ -26,6 +32,10 @@ type value struct {
 type redisStore struct {
 	mu    sync.RWMutex
 	store map[string]value
+}
+
+type config struct {
+	rdb rdbConfig
 }
 
 func (r *redisStore) Set(args []string) bool {
@@ -73,6 +83,19 @@ func (r *redisStore) Get(key string) (string, error) {
 	return "", errors.New("err - no value for this key")
 }
 
+func (c *config) getRDBConfig(args []string) (string, error) {
+	var output string
+	if args[0] == "get" {
+		if args[1] == "dir" {
+			output = c.rdb.dir
+		} else if args[1] == "rdbfilename" {
+			output = c.rdb.dbFileName
+		}
+		return respArrayGenerator(args[1], output), nil
+	}
+	return "", errors.New("err - unknown argument")
+}
+
 func expired(expiryTime int64) bool {
 	return time.Now().UnixNano() >= expiryTime
 }
@@ -82,6 +105,8 @@ func main() {
 	c := &clientData{}
 	c.activeClients.Store(0)
 	store := &redisStore{store: map[string]value{}}
+
+	config := parseFlags()
 
 	listener, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
@@ -99,12 +124,22 @@ func main() {
 			fmt.Println("Error in lister.Accept() connection, ", err)
 			continue
 		}
-		go handleConnection(conn, c, store)
+		go handleConnection(conn, c, store, config)
 
 	}
 }
 
-func handleConnection(conn net.Conn, c *clientData, store *redisStore) {
+func parseFlags() *config {
+	var config config
+	flag.StringVar(&config.rdb.dir, "dir", "", "RDB directory path")
+	flag.StringVar(&config.rdb.dbFileName, "dbfilename", "", "RDB file name")
+
+	flag.Parse()
+	return &config
+
+}
+
+func handleConnection(conn net.Conn, c *clientData, store *redisStore, config *config) {
 	defer conn.Close()
 
 	conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
@@ -113,11 +148,9 @@ func handleConnection(conn net.Conn, c *clientData, store *redisStore) {
 	for {
 
 		command, args, err := parseRESPString(reader)
-		if err != nil {
-			fmt.Println("Error parsing RESP string", err)
-		}
 
 		if err != nil {
+			fmt.Println("Error parsing RESP string", err)
 			if err == io.EOF {
 				fmt.Println("Client disconnected.")
 				c.activeClients.Add(^uint32(0))
@@ -129,7 +162,7 @@ func handleConnection(conn net.Conn, c *clientData, store *redisStore) {
 
 		}
 
-		output, err := handleCommand(command, args, store)
+		output, err := handleCommand(command, args, store, config)
 
 		if err != nil {
 			fmt.Println("error from redisInput parser", err)
@@ -185,12 +218,12 @@ func parseRESPString(reader *bufio.Reader) (string, []string, error) {
 		if i == 0 {
 			command = strings.ToLower(string(stringBytes))
 		} else {
-			args = append(args, string(stringBytes))
+
+			args = append(args, strings.ToLower(string(stringBytes)))
 		}
 	}
 
 	return command, args, nil
-
 }
 
 func parseRESPInteger(s string, min int, errorFormat string) (int, error) {
@@ -201,7 +234,7 @@ func parseRESPInteger(s string, min int, errorFormat string) (int, error) {
 	return val, nil
 }
 
-func handleCommand(command string, args []string, store *redisStore) (string, error) {
+func handleCommand(command string, args []string, store *redisStore, config *config) (string, error) {
 	switch command {
 	case "ping":
 		return "+PONG\r\n", nil
@@ -224,8 +257,14 @@ func handleCommand(command string, args []string, store *redisStore) (string, er
 			return "$-1\r\n", nil
 		}
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(string), string), nil
-
+	case "config":
+		return config.getRDBConfig(args)
 	default:
 		return "", errors.New("err - unknown command")
 	}
+}
+
+func respArrayGenerator(key, output string) string {
+	respArray := fmt.Sprintf("*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(output), output)
+	return respArray
 }
