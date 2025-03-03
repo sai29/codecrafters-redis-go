@@ -129,7 +129,10 @@ func (r *redisStore) Keys(args []string, config *config) (string, error) {
 		}
 
 		defer file.Close()
-		rdbStore, _ := readFileForKeys(file)
+		rdbStore, err := buildRdbStore(file)
+		if err != nil {
+			return "", err
+		}
 		return allKeysFromRdbStore(rdbStore)
 
 	}
@@ -145,7 +148,7 @@ func allKeysFromRdbStore(store rdbStore) (string, error) {
 	return output, nil
 }
 
-func readFileForKeys(file io.Reader) (rdbStore, error) {
+func buildRdbStore(file io.Reader) (rdbStore, error) {
 	reader := bufio.NewReader(file)
 	rdbParser := &rdbFileParser{currentState: startState, rdbFileInfo: rdbFileInfo{}}
 	rdbStore := &rdbStore{store: map[string]value{}}
@@ -188,6 +191,32 @@ func (c *config) getRDBConfig(args []string) (string, error) {
 		return respArrayGenerator(args[1], output), nil
 	}
 	return "", errors.New("err - unknown argument")
+}
+
+func (rdbC *rdbConfig) Get(key string) (string, error) {
+	path := rdbC.dir + "/" + rdbC.dbFileName
+	file, err := os.Open(path)
+	if err != nil {
+		fmt.Println("error opening file", err)
+		return "", err
+	}
+	defer file.Close()
+	rdbStore, err := buildRdbStore(file)
+	if err != nil {
+		return "", err
+	}
+	if val, ok := rdbStore.store[key]; ok {
+		if val.expiry == 0 {
+			return val.content, nil
+		} else {
+			if expired(val.expiry) {
+				return "", errors.New("err - value expired")
+			} else {
+				return val.content, nil
+			}
+		}
+	}
+	return "", errors.New("err - no value for this key")
 }
 
 func getNextState(rdbParser *rdbFileParser, buffer []byte, i *int, rdbStore *rdbStore) *rdbFileParser {
@@ -272,11 +301,17 @@ func handleCommand(command string, args []string, store *redisStore, config *con
 		}
 		return "", errors.New("err - setting value")
 	case "get":
-		string, err := store.Get(args[0])
+		var err error
+		var str string
+		if config.rdb.dbFileName != "" {
+			str, err = config.rdb.Get(args[0])
+		} else {
+			str, err = store.Get(args[0])
+		}
 		if err != nil {
 			return "$-1\r\n", nil
 		}
-		return fmt.Sprintf("$%d\r\n%s\r\n", len(string), string), nil
+		return fmt.Sprintf("$%d\r\n%s\r\n", len(str), str), nil
 	case "config":
 		return config.getRDBConfig(args)
 	case "keys":
