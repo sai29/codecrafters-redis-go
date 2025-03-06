@@ -130,6 +130,7 @@ func (r *redisStore) Keys(args []string, config *config) (string, error) {
 
 		defer file.Close()
 		rdbStore, err := buildRdbStore(file)
+		// fmt.Println("Rdb store is", rdbStore)
 		if err != nil {
 			return "", err
 		}
@@ -258,16 +259,23 @@ func getNextState(rdbParser *rdbFileParser, buffer []byte, i *int, rdbStore *rdb
 	case valueParsingState:
 		if buffer[*i] == 0xFF {
 			rdbParser.currentState = endOfFileState
-			rdbStore.store[rdbParser.currentKey] = value{
-				content: rdbParser.currentValue,
-				expiry:  0,
-			}
+			// fmt.Println("currentValue and currentKey are", rdbParser.currentValue, rdbParser.currentKey)
 			rdbParser.currentKey = ""
 			rdbParser.currentValue = ""
+			break
+		} else if buffer[*i] == 00 {
+			rdbParser.currentKey = ""
+			rdbParser.currentValue = ""
+			rdbParser.currentState = keyLengthState
 			break
 		}
 
 		rdbParser.currentValue = getBufferValue(rdbParser.currentValueLength, buffer, i)
+		rdbStore.store[rdbParser.currentKey] = value{
+			content: rdbParser.currentValue,
+			expiry:  0,
+		}
+
 	}
 	return rdbParser
 }
@@ -275,6 +283,7 @@ func getNextState(rdbParser *rdbFileParser, buffer []byte, i *int, rdbStore *rdb
 func getBufferValue(keyLength int, buffer []byte, i *int) string {
 	if *i+keyLength < len(buffer) {
 		currentKey := string(buffer[*i : *i+keyLength])
+		fmt.Println("Current key is", currentKey)
 		*i += keyLength - 1
 		return currentKey
 	} else {
