@@ -283,7 +283,7 @@ func getNextState(rdbParser *rdbFileParser, buffer []byte, i *int, rdbStore *rdb
 func getBufferValue(keyLength int, buffer []byte, i *int) string {
 	if *i+keyLength < len(buffer) {
 		currentKey := string(buffer[*i : *i+keyLength])
-		fmt.Println("Current key is", currentKey)
+		// fmt.Println("Current key is", currentKey)
 		*i += keyLength - 1
 		return currentKey
 	} else {
