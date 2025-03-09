@@ -53,7 +53,7 @@ func main() {
 	for {
 		conn, err := listener.Accept()
 		c.activeClients.Add(1)
-		// fmt.Println("Global counter is ", c.activeClients.Load())
+		fmt.Println("Global counter is ", c.activeClients.Load())
 		if err != nil {
 			fmt.Println("Error in lister.Accept() connection, ", err)
 			continue
@@ -70,7 +70,6 @@ func parseFlags() *config {
 
 	flag.Parse()
 	return &config
-
 }
 
 func handleConnection(conn net.Conn, c *clientData, store *redisStore, config *config) {
@@ -82,7 +81,6 @@ func handleConnection(conn net.Conn, c *clientData, store *redisStore, config *c
 	for {
 
 		command, args, err := parseRESPString(reader)
-
 		if err != nil {
 			fmt.Println("Error parsing RESP string", err)
 			if err == io.EOF {
@@ -93,11 +91,9 @@ func handleConnection(conn net.Conn, c *clientData, store *redisStore, config *c
 			} else {
 				continue
 			}
-
 		}
 
 		output, err := handleCommand(command, args, store, config)
-
 		if err != nil {
 			fmt.Println("error from redisInput parser", err)
 		} else {

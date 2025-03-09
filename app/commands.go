@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +22,17 @@ type rdbStore struct {
 	store map[string]value
 }
 
+type rdbStoreOptions struct {
+	singleKey string
+}
+type Option func(*rdbStoreOptions)
+
+func singleKeyFromRDB(key string) Option {
+	return func(opts *rdbStoreOptions) {
+		opts.singleKey = key
+	}
+}
+
 type rdbFileInfo struct {
 	currentDatabaseIndex int
 	totalHashCount       int
@@ -31,27 +43,30 @@ type rdbFileInfo struct {
 type rdbFileParser struct {
 	currentState int
 	// currentMode      int
-	currentKeyEncoding int
-	currentKeyLength   int
-	currentKey         string
-	currentValueLength int
-	currentValue       string
-	rdbFileInfo        rdbFileInfo
+	currentKeyEncoding        int
+	currentKeyExpiryTimeStamp int64
+	currentKeyLength          int
+	currentKey                string
+	currentValueLength        int
+	currentValue              string
+	rdbFileInfo               rdbFileInfo
 }
 
 var stateChangeMap = map[int]string{
-	startState:               "startState",
-	metaDataState:            "metaDataState",
-	databaseSectionState:     "databaseSectionState",
-	databaseIndexState:       "databaseIndexState",
-	totalHashCountState:      "totalHashCountState",
-	hashWithExpiryCountState: "hashWithExpiryCountState",
-	keyEncodingState:         "keyEncodingState",
-	keyLengthState:           "keyLengthState",
-	keyParsingState:          "keyParsingState",
-	valueLengthState:         "valueLengthState",
-	valueParsingState:        "valueParsingState",
-	endOfFileState:           "endOfFileState",
+	startState:                     "startState",
+	metaDataState:                  "metaDataState",
+	databaseSectionState:           "databaseSectionState",
+	databaseIndexState:             "databaseIndexState",
+	totalHashCountState:            "totalHashCountState",
+	hashWithExpiryCountState:       "hashWithExpiryCountState",
+	expiryOPCodeOrKeyEncodingState: "expiryOPCodeOrKeyEncodingState",
+	keyExpiryParsingState:          "keyExpiryParsingState",
+	keyEncodingState:               "keyEncodingState",
+	keyLengthState:                 "keyLengthState",
+	keyParsingState:                "keyParsingState",
+	valueLengthState:               "valueLengthState",
+	valueParsingState:              "valueParsingState",
+	endOfFileState:                 "endOfFileState",
 }
 
 const (
@@ -61,6 +76,8 @@ const (
 	databaseIndexState
 	totalHashCountState
 	hashWithExpiryCountState
+	expiryOPCodeOrKeyEncodingState
+	keyExpiryParsingState
 	keyEncodingState
 	keyLengthState
 	keyParsingState
@@ -130,7 +147,6 @@ func (r *redisStore) Keys(args []string, config *config) (string, error) {
 
 		defer file.Close()
 		rdbStore, err := buildRdbStore(file)
-		// fmt.Println("Rdb store is", rdbStore)
 		if err != nil {
 			return "", err
 		}
@@ -149,7 +165,12 @@ func allKeysFromRdbStore(store rdbStore) (string, error) {
 	return output, nil
 }
 
-func buildRdbStore(file io.Reader) (rdbStore, error) {
+func buildRdbStore(file io.Reader, opts ...Option) (rdbStore, error) {
+	options := rdbStoreOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	reader := bufio.NewReader(file)
 	rdbParser := &rdbFileParser{currentState: startState, rdbFileInfo: rdbFileInfo{}}
 	rdbStore := &rdbStore{store: map[string]value{}}
@@ -169,10 +190,15 @@ func buildRdbStore(file io.Reader) (rdbStore, error) {
 		}
 
 		for i := 0; i < rdbValCount; i++ {
-			// fmt.Printf("hex is: %X, string is: %s\n", buffer[i], string(buffer[i]))
 			currentState := rdbParser.currentState
 
 			rdbParser = getNextState(rdbParser, buffer, &i, rdbStore)
+			if options.singleKey != "" {
+				if _, ok := rdbStore.store[options.singleKey]; ok {
+					return *rdbStore, nil
+				}
+			}
+
 			if currentState != rdbParser.currentState {
 				// fmt.Printf("State changes from current %s -> next %s\n", stateChangeMap[currentState], stateChangeMap[rdbParser.currentState])
 			}
@@ -202,7 +228,8 @@ func (rdbC *rdbConfig) Get(key string) (string, error) {
 		return "", err
 	}
 	defer file.Close()
-	rdbStore, err := buildRdbStore(file)
+	rdbStore, err := buildRdbStore(file, singleKeyFromRDB(key))
+
 	if err != nil {
 		return "", err
 	}
@@ -210,7 +237,7 @@ func (rdbC *rdbConfig) Get(key string) (string, error) {
 		if val.expiry == 0 {
 			return val.content, nil
 		} else {
-			if expired(val.expiry) {
+			if expired(val.expiry * 1_000_000_000) {
 				return "", errors.New("err - value expired")
 			} else {
 				return val.content, nil
@@ -243,10 +270,18 @@ func getNextState(rdbParser *rdbFileParser, buffer []byte, i *int, rdbStore *rdb
 		rdbParser.currentState = hashWithExpiryCountState
 	case hashWithExpiryCountState:
 		rdbParser.rdbFileInfo.hashWithExpiryCount = int(b)
+		rdbParser.currentState = expiryOPCodeOrKeyEncodingState
+	case expiryOPCodeOrKeyEncodingState:
+		if b == 0xFC || b == 0xFD {
+			rdbParser.currentState = keyExpiryParsingState
+		} else {
+			setKeyEncoding(rdbParser, int(b))
+		}
+	case keyExpiryParsingState:
+		rdbParser.currentKeyExpiryTimeStamp = keyExpiryTimeStamp(buffer, i)
 		rdbParser.currentState = keyEncodingState
 	case keyEncodingState:
-		rdbParser.currentKeyEncoding = int(b)
-		rdbParser.currentState = keyLengthState
+		setKeyEncoding(rdbParser, int(b))
 	case keyLengthState:
 		rdbParser.currentKeyLength = int(b)
 		rdbParser.currentState = keyParsingState
@@ -259,7 +294,11 @@ func getNextState(rdbParser *rdbFileParser, buffer []byte, i *int, rdbStore *rdb
 	case valueParsingState:
 		if buffer[*i] == 0xFF {
 			rdbParser.currentState = endOfFileState
-			// fmt.Println("currentValue and currentKey are", rdbParser.currentValue, rdbParser.currentKey)
+			rdbParser.currentKey = ""
+			rdbParser.currentValue = ""
+			break
+		} else if buffer[*i] == 0xFC {
+			rdbParser.currentState = keyExpiryParsingState
 			rdbParser.currentKey = ""
 			rdbParser.currentValue = ""
 			break
@@ -273,10 +312,16 @@ func getNextState(rdbParser *rdbFileParser, buffer []byte, i *int, rdbStore *rdb
 		rdbParser.currentValue = getBufferValue(rdbParser.currentValueLength, buffer, i)
 		rdbStore.store[rdbParser.currentKey] = value{
 			content: rdbParser.currentValue,
-			expiry:  0,
+			expiry:  rdbParser.currentKeyExpiryTimeStamp,
 		}
 
 	}
+	return rdbParser
+}
+
+func setKeyEncoding(rdbParser *rdbFileParser, encodingVal int) *rdbFileParser {
+	rdbParser.currentKeyEncoding = int(encodingVal)
+	rdbParser.currentState = keyLengthState
 	return rdbParser
 }
 
@@ -290,6 +335,20 @@ func getBufferValue(keyLength int, buffer []byte, i *int) string {
 		// For now.
 		return ""
 	}
+}
+
+func keyExpiryTimeStamp(buffer []byte, i *int) int64 {
+	var expiryTime []byte
+	secondsUnitMarker := buffer[*i-1]
+	if secondsUnitMarker == 0xFC {
+		expiryTime = buffer[*i : *i+8]
+		*i += 7
+	} else if secondsUnitMarker == 0xFD {
+		expiryTime = buffer[*i : *i+4]
+		*i += 3
+	}
+	timeStamp := int64(binary.LittleEndian.Uint64(expiryTime) / 1000)
+	return timeStamp
 }
 
 func handleCommand(command string, args []string, store *redisStore, config *config) (string, error) {
