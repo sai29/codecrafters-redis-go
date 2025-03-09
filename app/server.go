@@ -16,6 +16,10 @@ type clientData struct {
 	activeClients atomic.Uint32
 }
 
+type serverConfig struct {
+	port int
+}
+
 type rdbConfig struct {
 	dir        string
 	dbFileName string
@@ -32,7 +36,8 @@ type redisStore struct {
 }
 
 type config struct {
-	rdb rdbConfig
+	rdb    rdbConfig
+	server serverConfig
 }
 
 func main() {
@@ -42,13 +47,15 @@ func main() {
 
 	config := parseFlags()
 
-	listener, err := net.Listen("tcp", "0.0.0.0:6379")
+	port := fmt.Sprintf("0.0.0.0:%d", config.server.port)
+
+	listener, err := net.Listen("tcp", port)
 	if err != nil {
 		fmt.Println("Error starting server:", err)
 		os.Exit(1)
 	}
 	defer listener.Close()
-	fmt.Println("server is listening on port 6379...")
+	fmt.Printf("server is listening on port -> %d...", config.server.port)
 
 	for {
 		conn, err := listener.Accept()
@@ -67,6 +74,7 @@ func parseFlags() *config {
 	var config config
 	flag.StringVar(&config.rdb.dir, "dir", "", "RDB directory path")
 	flag.StringVar(&config.rdb.dbFileName, "dbfilename", "", "RDB file name")
+	flag.IntVar(&config.server.port, "port", 6379, "Port number for redis server")
 
 	flag.Parse()
 	return &config

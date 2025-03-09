@@ -22,10 +22,11 @@ type rdbStore struct {
 	store map[string]value
 }
 
+type Option func(*rdbStoreOptions)
+
 type rdbStoreOptions struct {
 	singleKey string
 }
-type Option func(*rdbStoreOptions)
 
 func singleKeyFromRDB(key string) Option {
 	return func(opts *rdbStoreOptions) {
