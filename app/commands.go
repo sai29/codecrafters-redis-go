@@ -248,8 +248,18 @@ func (rdbC *rdbConfig) get(key string) (string, error) {
 	return "", errors.New("err - no value for this key")
 }
 
-func getReplicationInfo() (string, error) {
-	return "", errors.New("Error trying to fetch replication info")
+func getReplicationInfo(args []string, config *config) (string, error) {
+	output := ""
+	role := ""
+	if args[0] == "replication" && config.server.actAsReplica {
+		role = "slave"
+	} else {
+		role = "master"
+	}
+	masterReplId := "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
+	output += fmt.Sprintf("role:%s\nmaster_replid:%s\nmaster_repl_offset:%d", role, masterReplId, 0)
+
+	return fmt.Sprintf("$%d\r\n%s\r\n", len(output), output), nil
 }
 func getNextState(rdbParser *rdbFileParser, buffer []byte, i *int, rdbStore *rdbStore) *rdbFileParser {
 	b := buffer[*i]
@@ -365,11 +375,8 @@ func handleCommand(command string, args []string, store *redisStore, config *con
 		}
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(args[0]), args[0]), nil
 	case "info":
-		fmt.Println("args and config.server.actAsReplica are ", args, config.server.actAsReplica)
-		if args[0] == "replication" && config.server.actAsReplica {
-			return "$10\r\nrole:slave\r\n", nil
-		}
-		return "$11\r\nrole:master\r\n", nil
+		// fmt.Println("args and config.server.actAsReplica are ", args, config.server.actAsReplica)
+		return getReplicationInfo(args, config)
 	case "set":
 		if len(args) < 2 {
 			return "", errors.New("ERR wrong number of arguments for 'set' command")
