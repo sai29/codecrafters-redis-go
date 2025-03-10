@@ -93,7 +93,7 @@ const (
 // 	keyValueMode
 // )
 
-func (r *redisStore) Set(args []string) bool {
+func (r *redisStore) set(args []string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var expiry int64
@@ -120,7 +120,7 @@ func (r *redisStore) Set(args []string) bool {
 	return true
 }
 
-func (r *redisStore) Get(key string) (string, error) {
+func (r *redisStore) get(key string) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if val, ok := r.store[key]; ok {
@@ -137,7 +137,7 @@ func (r *redisStore) Get(key string) (string, error) {
 	return "", errors.New("err - no value for this key")
 }
 
-func (r *redisStore) Keys(args []string, config *config) (string, error) {
+func (r *redisStore) keys(args []string, config *config) (string, error) {
 	if args[0] == "*" {
 		path := config.rdb.dir + "/" + config.rdb.dbFileName
 		file, err := os.Open(path)
@@ -221,7 +221,7 @@ func (c *config) getRDBConfig(args []string) (string, error) {
 	return "", errors.New("err - unknown argument")
 }
 
-func (rdbC *rdbConfig) Get(key string) (string, error) {
+func (rdbC *rdbConfig) get(key string) (string, error) {
 	path := rdbC.dir + "/" + rdbC.dbFileName
 	file, err := os.Open(path)
 	if err != nil {
@@ -248,6 +248,9 @@ func (rdbC *rdbConfig) Get(key string) (string, error) {
 	return "", errors.New("err - no value for this key")
 }
 
+func getReplicationInfo() (string, error) {
+	return "", errors.New("Error trying to fetch replication info")
+}
 func getNextState(rdbParser *rdbFileParser, buffer []byte, i *int, rdbStore *rdbStore) *rdbFileParser {
 	b := buffer[*i]
 	switch rdbParser.currentState {
@@ -361,11 +364,13 @@ func handleCommand(command string, args []string, store *redisStore, config *con
 			return "", errors.New("err - wrong number of arguments")
 		}
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(args[0]), args[0]), nil
+	case "info":
+		return fmt.Sprintln("$11\r\nrole:master\r\n"), nil
 	case "set":
 		if len(args) < 2 {
 			return "", errors.New("ERR wrong number of arguments for 'set' command")
 		}
-		if store.Set(args) {
+		if store.set(args) {
 			return "+OK\r\n", nil
 		}
 		return "", errors.New("err - setting value")
@@ -373,9 +378,9 @@ func handleCommand(command string, args []string, store *redisStore, config *con
 		var err error
 		var str string
 		if config.rdb.dbFileName != "" {
-			str, err = config.rdb.Get(args[0])
+			str, err = config.rdb.get(args[0])
 		} else {
-			str, err = store.Get(args[0])
+			str, err = store.get(args[0])
 		}
 		if err != nil {
 			return "$-1\r\n", nil
@@ -384,7 +389,7 @@ func handleCommand(command string, args []string, store *redisStore, config *con
 	case "config":
 		return config.getRDBConfig(args)
 	case "keys":
-		return store.Keys(args, config)
+		return store.keys(args, config)
 	default:
 		return "", errors.New("err - unknown command")
 	}
