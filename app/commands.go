@@ -365,7 +365,11 @@ func handleCommand(command string, args []string, store *redisStore, config *con
 		}
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(args[0]), args[0]), nil
 	case "info":
-		return fmt.Sprintln("$11\r\nrole:master\r\n"), nil
+		fmt.Println("args and config.server.actAsReplica are ", args, config.server.actAsReplica)
+		if args[0] == "replication" && config.server.actAsReplica {
+			return "$10\r\nrole:slave\r\n", nil
+		}
+		return "$11\r\nrole:master\r\n", nil
 	case "set":
 		if len(args) < 2 {
 			return "", errors.New("ERR wrong number of arguments for 'set' command")

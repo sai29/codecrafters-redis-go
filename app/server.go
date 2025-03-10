@@ -17,7 +17,9 @@ type clientData struct {
 }
 
 type serverConfig struct {
-	port int
+	port          int
+	masterDetails string
+	actAsReplica  bool
 }
 
 type rdbConfig struct {
@@ -47,6 +49,8 @@ func main() {
 
 	config := parseFlags()
 
+	actAsReplica(config)
+
 	port := fmt.Sprintf("0.0.0.0:%d", config.server.port)
 
 	listener, err := net.Listen("tcp", port)
@@ -70,11 +74,18 @@ func main() {
 	}
 }
 
+func actAsReplica(c *config) {
+	if c.server.masterDetails != "" {
+		c.server.actAsReplica = true
+	}
+}
+
 func parseFlags() *config {
 	var config config
 	flag.StringVar(&config.rdb.dir, "dir", "", "RDB directory path")
 	flag.StringVar(&config.rdb.dbFileName, "dbfilename", "", "RDB file name")
 	flag.IntVar(&config.server.port, "port", 6379, "Port number for redis server")
+	flag.StringVar(&config.server.masterDetails, "replicaof", "", "Master details to run on a replica")
 
 	flag.Parse()
 	return &config
