@@ -102,20 +102,45 @@ func connectToMasterAsReplica(masterDetails string, ctx context.Context) {
 	_, err = conn.Write([]byte(pingCommand))
 	if err != nil {
 		fmt.Println("Error sending PING", err)
-	}
-
-	buffer := make([]byte, 1024)
-	n, err := conn.Read(buffer)
-	if err != nil {
-		fmt.Println("Error reading master response into replica", err)
-	}
-
-	fmt.Println("Buffer value is", string(buffer[:n]))
-
-	select {
-	case <-ctx.Done():
-		conn.Close()
 		return
+	}
+
+	replConfListeningCommand := fmt.Sprintf("*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$4\r\n%s\r\n", masterPort)
+	_, err = conn.Write([]byte(replConfListeningCommand))
+	if err != nil {
+		fmt.Println("Error sending PING", err)
+		return
+	}
+
+	replConfSyncCommand := "*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n"
+	_, err = conn.Write([]byte(replConfSyncCommand))
+	if err != nil {
+		fmt.Println("Error sending PING", err)
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+			return
+		default:
+			buffer := make([]byte, 1024)
+			n, err := conn.Read(buffer)
+			if err != nil {
+				if err == io.EOF {
+					fmt.Println("Master closed the connection.")
+				} else {
+					fmt.Println("Error reading master response into replica", err)
+
+				}
+				return
+			}
+
+			fmt.Println("Buffer value is", string(buffer[:n]))
+
+		}
+
 	}
 }
 
