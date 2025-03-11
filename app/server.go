@@ -131,6 +131,16 @@ func connectToMasterAsReplica(masterDetails string, ctx context.Context) {
 		fmt.Println("Error sending replConfSyncCommand", err)
 		return
 	}
+	n, err = conn.Read(buffer)
+	if err != nil {
+		if err == io.EOF {
+			fmt.Println("Master closed the connection.")
+		} else {
+			fmt.Println("Error reading master response into replica", err)
+
+		}
+		return
+	}
 
 	pSyncCommand := "*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"
 	_, err = conn.Write([]byte(pSyncCommand))
