@@ -121,14 +121,21 @@ func connectToMasterAsReplica(masterDetails string, ctx context.Context) {
 	replConfListeningCommand := "*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$4\r\n6380\r\n"
 	_, err = conn.Write([]byte(replConfListeningCommand))
 	if err != nil {
-		fmt.Println("Error sending PING", err)
+		fmt.Println("Error sending replConfListeningCommand", err)
 		return
 	}
 
 	replConfSyncCommand := "*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n"
 	_, err = conn.Write([]byte(replConfSyncCommand))
 	if err != nil {
-		fmt.Println("Error sending PING", err)
+		fmt.Println("Error sending replConfSyncCommand", err)
+		return
+	}
+
+	pSyncCommand := "*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"
+	_, err = conn.Write([]byte(pSyncCommand))
+	if err != nil {
+		fmt.Println("Error sending pSyncCommand", err)
 		return
 	}
 
