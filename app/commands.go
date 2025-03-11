@@ -261,6 +261,7 @@ func getReplicationInfo(args []string, config *config) (string, error) {
 
 	return fmt.Sprintf("$%d\r\n%s\r\n", len(output), output), nil
 }
+
 func getNextState(rdbParser *rdbFileParser, buffer []byte, i *int, rdbStore *rdbStore) *rdbFileParser {
 	b := buffer[*i]
 	switch rdbParser.currentState {
@@ -367,6 +368,8 @@ func keyExpiryTimeStamp(buffer []byte, i *int) int64 {
 
 func handleCommand(command string, args []string, store *redisStore, config *config) (string, error) {
 	switch command {
+	case "replconf":
+		return "+OK\r\n", nil
 	case "ping":
 		return "+PONG\r\n", nil
 	case "echo":
