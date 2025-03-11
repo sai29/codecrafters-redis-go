@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,8 +51,6 @@ func main() {
 
 	config := parseFlags()
 
-	actAsReplica(config)
-
 	port := fmt.Sprintf("0.0.0.0:%d", config.server.port)
 
 	listener, err := net.Listen("tcp", port)
@@ -58,8 +58,19 @@ func main() {
 		fmt.Println("Error starting server:", err)
 		os.Exit(1)
 	}
-	defer listener.Close()
+
 	fmt.Printf("server is listening on port -> %d...", config.server.port)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	actAsReplica(config)
+	if config.server.actAsReplica {
+		go connectToMasterAsReplica(config.server.masterDetails, ctx)
+	}
+
+	defer func() {
+		listener.Close()
+		cancel()
+	}()
 
 	for {
 		conn, err := listener.Accept()
@@ -71,6 +82,40 @@ func main() {
 		}
 		go handleConnection(conn, c, store, config)
 
+	}
+
+}
+
+func connectToMasterAsReplica(masterDetails string, ctx context.Context) {
+
+	masterHost, masterPort := func(args []string) (string, string) {
+		return args[0], args[1]
+	}(strings.Split(masterDetails, " "))
+
+	conn, err := net.Dial("tcp", net.JoinHostPort(masterHost, masterPort))
+	if err != nil {
+		fmt.Println("Error connecting to master as replica", err)
+		return
+	}
+
+	pingCommand := "*1\r\n$4\r\nPING\r\n"
+	_, err = conn.Write([]byte(pingCommand))
+	if err != nil {
+		fmt.Println("Error sending PING", err)
+	}
+
+	buffer := make([]byte, 1024)
+	n, err := conn.Read(buffer)
+	if err != nil {
+		fmt.Println("Error reading master response into replica", err)
+	}
+
+	fmt.Println("Buffer value is", string(buffer[:n]))
+
+	select {
+	case <-ctx.Done():
+		conn.Close()
+		return
 	}
 }
 
@@ -118,6 +163,5 @@ func handleConnection(conn net.Conn, c *clientData, store *redisStore, config *c
 		} else {
 			conn.Write([]byte(output))
 		}
-
 	}
 }
