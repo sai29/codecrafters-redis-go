@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -366,13 +368,45 @@ func keyExpiryTimeStamp(buffer []byte, i *int) int64 {
 	return timeStamp
 }
 
-func handleCommand(command string, args []string, store *redisStore, config *config) (string, error) {
+func handlePsyncCommand(conn net.Conn) {
+	fullResyncResponse := "+FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0\r\n"
+	_, err := conn.Write([]byte(fullResyncResponse))
+	if err != nil {
+		fmt.Printf("error sending FULLRESYNC response: %v", err)
+	}
+}
+
+func sendEmptyRDBFile(conn net.Conn) {
+	emptyRDBHex := "524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2"
+
+	rdbFile, err := hex.DecodeString(emptyRDBHex)
+	if err != nil {
+		fmt.Printf("error decoding RDB file: %v", err)
+	}
+
+	rdbLength := len(rdbFile)
+	rdbHeader := fmt.Sprintf("$%d\r\n", rdbLength)
+
+	_, err = conn.Write([]byte(rdbHeader))
+	fmt.Println("Coming here after sending rdb header")
+	if err != nil {
+		fmt.Printf("error sending RDB header: %v", err)
+	}
+
+	_, err = conn.Write(rdbFile)
+	if err != nil {
+		fmt.Printf("error sending RDB file: %v", err)
+	}
+}
+
+func handleCommand(conn net.Conn, command string, args []string, store *redisStore, config *config) (string, error) {
 	switch command {
 	case "replconf":
 		return "+OK\r\n", nil
 	case "psync":
-		return "+FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0\r\n", nil
-
+		handlePsyncCommand(conn)
+		sendEmptyRDBFile(conn)
+		return "", nil
 	case "ping":
 		return "+PONG\r\n", nil
 	case "echo":

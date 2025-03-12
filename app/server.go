@@ -161,11 +161,8 @@ func connectToMasterAsReplica(masterDetails string, ctx context.Context) {
 		return
 	}
 
-	select {
-	case <-ctx.Done():
-		conn.Close()
-		return
-	}
+	<-ctx.Done()
+	conn.Close()
 
 }
 
@@ -207,7 +204,7 @@ func handleConnection(conn net.Conn, c *clientData, store *redisStore, config *c
 			}
 		}
 
-		output, err := handleCommand(command, args, store, config)
+		output, err := handleCommand(conn, command, args, store, config)
 		if err != nil {
 			fmt.Println("error from redisInput parser", err)
 		} else {
