@@ -72,6 +72,8 @@ func main() {
 		cancel()
 	}()
 
+	cm := newConnectionManager()
+
 	for {
 		conn, err := listener.Accept()
 		c.activeClients.Add(1)
@@ -80,10 +82,9 @@ func main() {
 			fmt.Println("Error in lister.Accept() connection, ", err)
 			continue
 		}
-		go handleConnection(conn, c, store, config)
+		go handleConnection(conn, c, store, config, cm)
 
 	}
-
 }
 
 func connectToMasterAsReplica(masterDetails string, ctx context.Context) {
@@ -163,7 +164,6 @@ func connectToMasterAsReplica(masterDetails string, ctx context.Context) {
 
 	<-ctx.Done()
 	conn.Close()
-
 }
 
 func actAsReplica(c *config) {
@@ -183,7 +183,7 @@ func parseFlags() *config {
 	return &config
 }
 
-func handleConnection(conn net.Conn, c *clientData, store *redisStore, config *config) {
+func handleConnection(conn net.Conn, c *clientData, store *redisStore, config *config, cm *connectionManager) {
 	defer conn.Close()
 
 	conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
@@ -204,7 +204,7 @@ func handleConnection(conn net.Conn, c *clientData, store *redisStore, config *c
 			}
 		}
 
-		output, err := handleCommand(conn, command, args, store, config)
+		output, err := handleCommand(conn, command, args, store, config, cm)
 		if err != nil {
 			fmt.Println("error from redisInput parser", err)
 		} else {

@@ -399,13 +399,14 @@ func sendEmptyRDBFile(conn net.Conn) {
 	}
 }
 
-func handleCommand(conn net.Conn, command string, args []string, store *redisStore, config *config) (string, error) {
+func handleCommand(conn net.Conn, command string, args []string, store *redisStore, config *config, cm *connectionManager) (string, error) {
 	switch command {
 	case "replconf":
 		return "+OK\r\n", nil
 	case "psync":
 		handlePsyncCommand(conn)
 		sendEmptyRDBFile(conn)
+		cm.addConnection(conn.RemoteAddr().String(), conn, "replica")
 		return "", nil
 	case "ping":
 		return "+PONG\r\n", nil
@@ -418,10 +419,16 @@ func handleCommand(conn net.Conn, command string, args []string, store *redisSto
 		// fmt.Println("args and config.server.actAsReplica are ", args, config.server.actAsReplica)
 		return getReplicationInfo(args, config)
 	case "set":
+		fmt.Println("Args is", args)
 		if len(args) < 2 {
 			return "", errors.New("ERR wrong number of arguments for 'set' command")
 		}
 		if store.set(args) {
+			if len(cm.replicas) > 0 {
+				argCopy := append([]string{command}, args...)
+				// respArray := fmt.Sprintf("*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n")
+				cm.propagateCommandsToReplica(respGenerator(argCopy))
+			}
 			return "+OK\r\n", nil
 		}
 		return "", errors.New("err - setting value")

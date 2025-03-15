@@ -73,3 +73,12 @@ func respArrayGenerator(key, output string) string {
 	respArray := fmt.Sprintf("*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(output), output)
 	return respArray
 }
+
+func respGenerator(args []string) string {
+	// '*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n'
+	output := fmt.Sprintf("*%d\r\n", len(args))
+	for _, v := range args {
+		output += fmt.Sprintf("$%d\r\n%s\r\n", len(v), v)
+	}
+	return output
+}
