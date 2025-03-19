@@ -402,7 +402,12 @@ func sendEmptyRDBFile(conn net.Conn) {
 func handleCommand(conn net.Conn, command string, args []string, store *redisStore, config *config, cm *connectionManager) (string, error) {
 	switch command {
 	case "replconf":
-		return "+OK\r\n", nil
+		if args[0] == "getack" {
+			return "*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$1\r\n0\r\n", nil
+		} else {
+			return "+OK\r\n", nil
+		}
+		// return "", errors.New("Invalid replconf command")
 	case "psync":
 		sendPsyncCommand(conn)
 		sendEmptyRDBFile(conn)
