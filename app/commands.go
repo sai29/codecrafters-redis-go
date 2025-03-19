@@ -368,7 +368,7 @@ func keyExpiryTimeStamp(buffer []byte, i *int) int64 {
 	return timeStamp
 }
 
-func handlePsyncCommand(conn net.Conn) {
+func sendPsyncCommand(conn net.Conn) {
 	fullResyncResponse := "+FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0\r\n"
 	_, err := conn.Write([]byte(fullResyncResponse))
 	if err != nil {
@@ -404,7 +404,7 @@ func handleCommand(conn net.Conn, command string, args []string, store *redisSto
 	case "replconf":
 		return "+OK\r\n", nil
 	case "psync":
-		handlePsyncCommand(conn)
+		sendPsyncCommand(conn)
 		sendEmptyRDBFile(conn)
 		cm.addConnection(conn.RemoteAddr().String(), conn, "replica")
 		return "", nil

@@ -8,13 +8,14 @@ import (
 	"strings"
 )
 
+// Example input - *2\r\n$4\r\nECHO\r\n$3\r\nhey\r\n
 func parseRESPString(reader *bufio.Reader) (string, []string, error) {
 
 	header, _, err := reader.ReadLine()
 	if err != nil {
 		return "", nil, err
 	}
-
+	fmt.Println("Header is", string(header[:]))
 	if len(header) == 0 || header[0] != '*' {
 		return "", nil, fmt.Errorf("invalid RESP header")
 	}
@@ -60,6 +61,10 @@ func parseRESPString(reader *bufio.Reader) (string, []string, error) {
 
 	return command, args, nil
 }
+
+// func parseRESPSetForReplica(reader *bufio.Reader) (string, []string, error) {
+
+// }
 
 func parseRESPInteger(s string, min int, errorFormat string) (int, error) {
 	val, err := strconv.Atoi(s)

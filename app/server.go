@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,20 +60,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("server is listening on port -> %d...", config.server.port)
+	fmt.Printf("server is listening on port as replica -> %d...", config.server.port)
 	ctx, cancel := context.WithCancel(context.Background())
+	cm := newConnectionManager()
 
 	actAsReplica(config)
 	if config.server.actAsReplica {
-		go connectToMasterAsReplica(config.server.masterDetails, ctx)
+		go connectToMasterAsReplica(config, ctx, cm, store)
 	}
 
 	defer func() {
 		listener.Close()
 		cancel()
 	}()
-
-	cm := newConnectionManager()
 
 	for {
 		conn, err := listener.Accept()
@@ -87,17 +87,30 @@ func main() {
 	}
 }
 
-func connectToMasterAsReplica(masterDetails string, ctx context.Context) {
+func connectToMasterAsReplica(config *config, ctx context.Context, cm *connectionManager, store *redisStore) {
 
 	masterHost, masterPort := func(args []string) (string, string) {
 		return args[0], args[1]
-	}(strings.Split(masterDetails, " "))
+	}(strings.Split(config.server.masterDetails, " "))
 
 	conn, err := net.Dial("tcp", net.JoinHostPort(masterHost, masterPort))
 	if err != nil {
 		fmt.Println("Error connecting to master as replica", err)
 		return
 	}
+
+	// commands := []string{
+	// 	"*1\r\n$4\r\nPING\r\n",
+	// 	"*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$4\r\n6380\r\n",
+	// 	"*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n",
+	// 	"*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"}
+
+	// for _, cmd := range commands {
+	// 	if _, err := sendCommand(conn, cmd); err != nil {
+	// 		fmt.Println(err)
+	// 		return
+	// 	}
+	// }
 
 	pingCommand := "*1\r\n$4\r\nPING\r\n"
 	_, err = conn.Write([]byte(pingCommand))
@@ -162,8 +175,66 @@ func connectToMasterAsReplica(masterDetails string, ctx context.Context) {
 		return
 	}
 
+	reader := bufio.NewReader(conn)
+
+	_, err = reader.ReadString('\n')
+	if err != nil {
+		fmt.Println("Error while reading first line", err)
+	}
+
+	rdbSize, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Println("Error reading RDB size", err)
+	}
+	// fmt.Println("rdb size is", strings.TrimPrefix(rdbSize, "$"))
+	rdbSize = strings.TrimSuffix(rdbSize, "\r\n")
+	rdbSize = strings.TrimPrefix(rdbSize, "$")
+	rdbByteCount, err := strconv.Atoi(rdbSize)
+	if err != nil {
+		fmt.Println("Error converting rdb file size byte values to int", err)
+	}
+
+	io.CopyN(io.Discard, reader, int64(rdbByteCount))
+
+	for {
+
+		command, args, err := parseRESPString(reader)
+		fmt.Println("Command and args are", command, args)
+
+		if err != nil {
+			if err == io.EOF {
+				fmt.Println("Finished reading all commands and io.EOF reached")
+			}
+			fmt.Println("Error parsing parseRESPString", err)
+			break
+		}
+
+		output, err := handleCommand(conn, command, args, store, config, cm)
+		if err != nil {
+			fmt.Println("error from redisInput parser", err)
+		} else {
+			conn.Write([]byte(output))
+		}
+	}
+
 	<-ctx.Done()
 	conn.Close()
+}
+
+func sendCommand(conn net.Conn, command string) (string, error) {
+	_, err := conn.Write([]byte(command))
+	if err != nil {
+		return "", fmt.Errorf("error sending command: %w", err)
+	}
+
+	buffer := make([]byte, 1024)
+	n, err := conn.Read(buffer)
+	if err != nil {
+		return "", fmt.Errorf("error reading response: %w", err)
+	}
+	fmt.Println("Buffer value is", string(buffer[:n]))
+
+	return string(buffer[:n]), nil
 }
 
 func actAsReplica(c *config) {
