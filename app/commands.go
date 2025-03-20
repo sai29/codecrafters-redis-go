@@ -417,6 +417,8 @@ func handleCommand(conn net.Conn, command string, args []string, store *redisSto
 		sendEmptyRDBFile(conn)
 		cm.addConnection(conn.RemoteAddr().String(), conn, "replica")
 		return "", nil
+	case "wait":
+		return ":0\r\n", nil
 	case "ping":
 		return "+PONG\r\n", nil
 	case "echo":
