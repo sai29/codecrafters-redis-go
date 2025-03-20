@@ -15,7 +15,7 @@ func parseRESPString(reader *bufio.Reader) (string, []string, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	fmt.Println("Header is", string(header[:]))
+
 	if len(header) == 0 || header[0] != '*' {
 		return "", nil, fmt.Errorf("invalid RESP header")
 	}
@@ -72,11 +72,6 @@ func parseRESPInteger(s string, min int, errorFormat string) (int, error) {
 		return 0, fmt.Errorf(errorFormat, s)
 	}
 	return val, nil
-}
-
-func respArrayGenerator(key, output string) string {
-	respArray := fmt.Sprintf("*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(output), output)
-	return respArray
 }
 
 func respGenerator(args []string) string {

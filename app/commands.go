@@ -184,7 +184,7 @@ func buildRdbStore(file io.Reader, opts ...Option) (rdbStore, error) {
 		rdbValCount, err := reader.Read(buffer)
 		if err != nil {
 			if err == io.EOF {
-				fmt.Println("end of buffer")
+				fmt.Println("EOF: reading RDB file")
 				break
 			}
 			fmt.Println("Error while reading byte", err)
@@ -218,7 +218,8 @@ func (c *config) getRDBConfig(args []string) (string, error) {
 		} else if args[1] == "rdbfilename" {
 			output = c.rdb.dbFileName
 		}
-		return respArrayGenerator(args[1], output), nil
+		respArgs := []string{args[1], output}
+		return respGenerator(respArgs), nil
 	}
 	return "", errors.New("err - unknown argument")
 }
@@ -345,7 +346,6 @@ func setKeyEncoding(rdbParser *rdbFileParser, encodingVal int) *rdbFileParser {
 func getBufferValue(keyLength int, buffer []byte, i *int) string {
 	if *i+keyLength < len(buffer) {
 		currentKey := string(buffer[*i : *i+keyLength])
-		// fmt.Println("Current key is", currentKey)
 		*i += keyLength - 1
 		return currentKey
 	} else {
@@ -388,7 +388,6 @@ func sendEmptyRDBFile(conn net.Conn) {
 	rdbHeader := fmt.Sprintf("$%d\r\n", rdbLength)
 
 	_, err = conn.Write([]byte(rdbHeader))
-	fmt.Println("Coming here after sending rdb header")
 	if err != nil {
 		fmt.Printf("error sending RDB header: %v", err)
 	}
@@ -400,14 +399,19 @@ func sendEmptyRDBFile(conn net.Conn) {
 }
 
 func handleCommand(conn net.Conn, command string, args []string, store *redisStore, config *config, cm *connectionManager) (string, error) {
+	byteCountBeforeProcessingCurrentCommand := config.server.bytesReadAsReplica
+	if config.server.actAsReplica {
+		respGeneratorArg := append([]string{}, append(args, command)...)
+		respString := respGenerator(respGeneratorArg)
+		config.server.bytesReadAsReplica += len([]byte(respString))
+	}
 	switch command {
 	case "replconf":
-		if args[0] == "getack" {
-			return "*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$1\r\n0\r\n", nil
+		if args[0] == "getack" && args[1] == "*" {
+			return respGenerator([]string{"REPLCONF", "ACK", strconv.Itoa(byteCountBeforeProcessingCurrentCommand)}), nil
 		} else {
 			return "+OK\r\n", nil
 		}
-		// return "", errors.New("Invalid replconf command")
 	case "psync":
 		sendPsyncCommand(conn)
 		sendEmptyRDBFile(conn)
@@ -421,17 +425,14 @@ func handleCommand(conn net.Conn, command string, args []string, store *redisSto
 		}
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(args[0]), args[0]), nil
 	case "info":
-		// fmt.Println("args and config.server.actAsReplica are ", args, config.server.actAsReplica)
 		return getReplicationInfo(args, config)
 	case "set":
-		fmt.Println("Args is", args)
 		if len(args) < 2 {
 			return "", errors.New("ERR wrong number of arguments for 'set' command")
 		}
 		if store.set(args) {
 			if len(cm.replicas) > 0 {
 				argCopy := append([]string{command}, args...)
-				// respArray := fmt.Sprintf("*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n")
 				cm.propagateCommandsToReplica(respGenerator(argCopy))
 			}
 			return "+OK\r\n", nil
