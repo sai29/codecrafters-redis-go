@@ -418,7 +418,7 @@ func handleCommand(conn net.Conn, command string, args []string, store *redisSto
 		cm.addConnection(conn.RemoteAddr().String(), conn, "replica")
 		return "", nil
 	case "wait":
-		return ":0\r\n", nil
+		return fmt.Sprintf(":%d\r\n", len(cm.replicas)), nil
 	case "ping":
 		return "+PONG\r\n", nil
 	case "echo":
